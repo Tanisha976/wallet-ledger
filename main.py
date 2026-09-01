@@ -25,7 +25,7 @@ from fastapi import Depends, HTTPException
 from sqlalchemy.orm import Session
 from database import get_db
 from models import Wallet, LedgerEntry
-from schemas import WalletCreate, WalletResponse, DepositRequest
+from schemas import WalletCreate, WalletResponse, DepositRequest, WithdrawRequest
 
 @app.post("/wallets", response_model=WalletResponse)
 def create_wallet(wallet: WalletCreate, db: Session = Depends(get_db)):
@@ -57,3 +57,69 @@ def deposit(wallet_id: int, request: DepositRequest, db: Session = Depends(get_d
     db.commit()
     db.refresh(wallet)
     return wallet
+
+@app.post("/wallets/{wallet_id}/withdraw", response_model=WalletResponse)
+def withdraw(wallet_id: int, request: WithdrawRequest, db: Session = Depends(get_db)):
+    if request.amount <= 0:
+        raise HTTPException(status_code=400, detail="Amount must be positive")
+
+    wallet = db.query(Wallet).filter(Wallet.id == wallet_id).first()
+    if not wallet:
+        raise HTTPException(status_code=404, detail="Wallet not found")
+
+    if wallet.balance < request.amount:
+        raise HTTPException(status_code=400, detail="Insufficient balance")
+
+    wallet.balance -= request.amount
+
+    entry = LedgerEntry(
+        wallet_id=wallet.id,
+        transaction_id=uuid.uuid4(),
+        entry_type="debit",
+        amount=request.amount
+    )
+    db.add(entry)
+    db.commit()
+    db.refresh(wallet)
+    return wallet
+
+from schemas import TransferRequest, TransferResponse
+
+@app.post("/transfer", response_model=TransferResponse)
+def transfer(request: TransferRequest, db: Session = Depends(get_db)):
+    if request.amount <= 0:
+        raise HTTPException(status_code=400, detail="Amount must be positive")
+
+    if request.from_wallet_id == request.to_wallet_id:
+        raise HTTPException(status_code=400, detail="Cannot transfer to the same wallet")
+
+    from_wallet = db.query(Wallet).filter(Wallet.id == request.from_wallet_id).first()
+    if not from_wallet:
+        raise HTTPException(status_code=404, detail="Source wallet not found")
+
+    to_wallet = db.query(Wallet).filter(Wallet.id == request.to_wallet_id).first()
+    if not to_wallet:
+        raise HTTPException(status_code=404, detail="Destination wallet not found")
+
+    if from_wallet.balance < request.amount:
+        raise HTTPException(status_code=400, detail="Insufficient balance")
+
+    txn_id = uuid.uuid4()
+
+    from_wallet.balance -= request.amount
+    to_wallet.balance += request.amount
+
+    db.add(LedgerEntry(wallet_id=from_wallet.id, transaction_id=txn_id, entry_type="debit", amount=request.amount))
+    db.add(LedgerEntry(wallet_id=to_wallet.id, transaction_id=txn_id, entry_type="credit", amount=request.amount))
+
+    db.commit()
+    db.refresh(from_wallet)
+    db.refresh(to_wallet)
+
+    return TransferResponse(
+        transaction_id=str(txn_id),
+        from_wallet_id=from_wallet.id,
+        from_wallet_balance=from_wallet.balance,
+        to_wallet_id=to_wallet.id,
+        to_wallet_balance=to_wallet.balance
+    )
