@@ -63,7 +63,7 @@ def withdraw(wallet_id: int, request: WithdrawRequest, db: Session = Depends(get
     if request.amount <= 0:
         raise HTTPException(status_code=400, detail="Amount must be positive")
 
-    wallet = db.query(Wallet).filter(Wallet.id == wallet_id).first()
+    wallet = db.query(Wallet).filter(Wallet.id == wallet_id).with_for_update().first()
     if not wallet:
         raise HTTPException(status_code=404, detail="Wallet not found")
 
@@ -93,11 +93,18 @@ def transfer(request: TransferRequest, db: Session = Depends(get_db)):
     if request.from_wallet_id == request.to_wallet_id:
         raise HTTPException(status_code=400, detail="Cannot transfer to the same wallet")
 
-    from_wallet = db.query(Wallet).filter(Wallet.id == request.from_wallet_id).first()
+    lower_id, higher_id = sorted([request.from_wallet_id, request.to_wallet_id])
+
+    wallet_lower = db.query(Wallet).filter(Wallet.id == lower_id).with_for_update().first()
+    wallet_higher = db.query(Wallet).filter(Wallet.id == higher_id).with_for_update().first()
+
+    if request.from_wallet_id == lower_id:
+        from_wallet, to_wallet = wallet_lower, wallet_higher
+    else:
+        from_wallet, to_wallet = wallet_higher, wallet_lower
+
     if not from_wallet:
         raise HTTPException(status_code=404, detail="Source wallet not found")
-
-    to_wallet = db.query(Wallet).filter(Wallet.id == request.to_wallet_id).first()
     if not to_wallet:
         raise HTTPException(status_code=404, detail="Destination wallet not found")
 
@@ -105,7 +112,6 @@ def transfer(request: TransferRequest, db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail="Insufficient balance")
 
     txn_id = uuid.uuid4()
-
     from_wallet.balance -= request.amount
     to_wallet.balance += request.amount
 
@@ -123,3 +129,11 @@ def transfer(request: TransferRequest, db: Session = Depends(get_db)):
         to_wallet_id=to_wallet.id,
         to_wallet_balance=to_wallet.balance
     )
+
+@app.get("/wallets/{wallet_id}", response_model=WalletResponse)
+def get_wallet(wallet_id: int, db: Session = Depends(get_db)):
+    wallet = db.query(Wallet).filter(Wallet.id == wallet_id).first()
+    if not wallet:
+        raise HTTPException(status_code=404, detail="Wallet not found")
+    return wallet
+
