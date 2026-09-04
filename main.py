@@ -207,7 +207,7 @@ def get_wallet(wallet_id: int, db: Session = Depends(get_db)):
     return wallet
 
 from fastapi import Query
-from schemas import LedgerEntryResponse, TransactionHistoryResponse
+from schemas import TransactionHistoryResponse
 
 @app.get("/wallets/{wallet_id}/transactions", response_model=TransactionHistoryResponse)
 def get_transaction_history(
