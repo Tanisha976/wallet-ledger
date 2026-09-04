@@ -206,3 +206,36 @@ def get_wallet(wallet_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Wallet not found")
     return wallet
 
+from fastapi import Query
+from schemas import LedgerEntryResponse, TransactionHistoryResponse
+
+@app.get("/wallets/{wallet_id}/transactions", response_model=TransactionHistoryResponse)
+def get_transaction_history(
+    wallet_id: int,
+    limit: int = Query(default=10, gt=0, le=100),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db)
+):
+    wallet = db.query(Wallet).filter(Wallet.id == wallet_id).first()
+    if not wallet:
+        raise HTTPException(status_code=404, detail="Wallet not found")
+
+    total_count = db.query(LedgerEntry).filter(LedgerEntry.wallet_id == wallet_id).count()
+
+    entries = (
+        db.query(LedgerEntry)
+        .filter(LedgerEntry.wallet_id == wallet_id)
+        .order_by(LedgerEntry.created_at.desc())
+        .limit(limit)
+        .offset(offset)
+        .all()
+    )
+
+    return TransactionHistoryResponse(
+        wallet_id=wallet_id,
+        total_count=total_count,
+        limit=limit,
+        offset=offset,
+        has_more=(offset + limit) < total_count,
+        transactions=entries
+    )

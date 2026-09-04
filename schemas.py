@@ -29,3 +29,24 @@ class TransferResponse(BaseModel):
     from_wallet_balance: Decimal
     to_wallet_id: int
     to_wallet_balance: Decimal
+
+from datetime import datetime
+import uuid
+
+class LedgerEntryResponse(BaseModel):
+    id: int
+    transaction_id: uuid.UUID
+    entry_type: str
+    amount: Decimal
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+class TransactionHistoryResponse(BaseModel):
+    wallet_id: int
+    total_count: int
+    limit: int
+    offset: int
+    has_more: bool
+    transactions: list[LedgerEntryResponse]
