@@ -2,6 +2,21 @@ from fastapi import FastAPI
 from sqlalchemy import text
 from database import engine, redis_client
 
+from fastapi import Header
+from fastapi.encoders import jsonable_encoder
+import json
+
+RATE_LIMIT = 10
+RATE_WINDOW_SECONDS = 60
+
+def check_rate_limit(wallet_id: id):
+    key = f"ratelimit:{wallet_id}"
+    current = redis_client.incr(key)
+    if current == 1:
+        redis_client.expire(key,RATE_WINDOW_SECONDS)
+    if current > RATE_LIMIT:
+        raise HTTPException(status_code=429, detail="Too many requests. Please slow down.")
+
 app = FastAPI()
 
 @app.get("/")
@@ -37,11 +52,23 @@ def create_wallet(wallet: WalletCreate, db: Session = Depends(get_db)):
 
 
 @app.post("/wallets/{wallet_id}/deposit", response_model=WalletResponse)
-def deposit(wallet_id: int, request: DepositRequest, db: Session = Depends(get_db)):
+def deposit(wallet_id: int, 
+            request: DepositRequest, 
+            db: Session = Depends(get_db),
+            idempotency_key: str = Header(..., alias="Idempotency-Key", min_length=1)
+            ):
+
+    cache_key = f"idempotency:{idempotency_key}"
+    cached = redis_client.get(cache_key)
+    if cached:
+        return json.loads(cached)
+
+    check_rate_limit(wallet_id)
+    
     if request.amount <= 0:
         raise HTTPException(status_code=400, detail="Amount must be positive")
 
-    wallet = db.query(Wallet).filter(Wallet.id == wallet_id).first()
+    wallet = db.query(Wallet).filter(Wallet.id == wallet_id).with_for_update().first()
     if not wallet:
         raise HTTPException(status_code=404, detail="Wallet not found")
 
@@ -56,10 +83,29 @@ def deposit(wallet_id: int, request: DepositRequest, db: Session = Depends(get_d
     db.add(entry)
     db.commit()
     db.refresh(wallet)
-    return wallet
+
+    response_data = jsonable_encoder(WalletResponse.model_validate(wallet))
+
+    if cache_key:
+        redis_client.set(cache_key, json.dumps(response_data), ex=86400)
+
+    return response_data
 
 @app.post("/wallets/{wallet_id}/withdraw", response_model=WalletResponse)
-def withdraw(wallet_id: int, request: WithdrawRequest, db: Session = Depends(get_db)):
+def withdraw(wallet_id: int, 
+             request: WithdrawRequest, 
+             db: Session = Depends(get_db),
+             idempotency_key: str = Header(..., alias="Idempotency-Key",min_length=1)
+            ):
+
+    cache_key = f"idempotency:{idempotency_key}"
+
+    cached = redis_client.get(cache_key)
+    if cached:
+        return json.loads(cached)
+
+    check_rate_limit(wallet_id)
+    
     if request.amount <= 0:
         raise HTTPException(status_code=400, detail="Amount must be positive")
 
@@ -81,12 +127,30 @@ def withdraw(wallet_id: int, request: WithdrawRequest, db: Session = Depends(get
     db.add(entry)
     db.commit()
     db.refresh(wallet)
-    return wallet
+
+    response_data = jsonable_encoder(WalletResponse.model_validate(wallet))
+
+    if cache_key:
+        redis_client.set(cache_key, json.dumps(response_data), ex=86400)
+
+    return response_data
 
 from schemas import TransferRequest, TransferResponse
 
 @app.post("/transfer", response_model=TransferResponse)
-def transfer(request: TransferRequest, db: Session = Depends(get_db)):
+def transfer(request: TransferRequest, 
+             db: Session = Depends(get_db),
+             idempotency_key: str = Header(..., alias="Idempotency-Key",min_length=1)
+            ):
+
+    cache_key = f"idempotency:{idempotency_key}"
+
+    cached = redis_client.get(cache_key)
+    if cached:
+        return json.loads(cached)
+
+    check_rate_limit(request.from_wallet_id)
+    
     if request.amount <= 0:
         raise HTTPException(status_code=400, detail="Amount must be positive")
 
@@ -122,13 +186,18 @@ def transfer(request: TransferRequest, db: Session = Depends(get_db)):
     db.refresh(from_wallet)
     db.refresh(to_wallet)
 
-    return TransferResponse(
+    response_data = jsonable_encoder(TransferResponse(
         transaction_id=str(txn_id),
         from_wallet_id=from_wallet.id,
         from_wallet_balance=from_wallet.balance,
         to_wallet_id=to_wallet.id,
         to_wallet_balance=to_wallet.balance
-    )
+    ))
+
+    if cache_key:
+        redis_client.set(cache_key, json.dumps(response_data), ex=86400)
+
+    return response_data
 
 @app.get("/wallets/{wallet_id}", response_model=WalletResponse)
 def get_wallet(wallet_id: int, db: Session = Depends(get_db)):

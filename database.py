@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-engine = create_engine(os.getenv("DATABASE_URL"))
+engine = create_engine(os.getenv("DATABASE_URL"),pool_pre_ping=True)
 redis_client = redis.from_url(os.getenv("REDIS_URL"))
 
 from sqlalchemy.orm import Session
