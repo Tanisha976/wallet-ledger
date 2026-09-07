@@ -130,4 +130,3 @@ Visit `http://127.0.0.1:8000/docs`.
 - Single shared database for local dev and production (a real team setup would separate these)
 - No `users`/auth layer — wallets are the modeled entity, deliberately out of scope
 
-Full breakdown of every design decision, alternative considered, and trade-off: [`wallet-ledger-documentation.md`](./wallet-ledger-documentation.md)
